@@ -18,6 +18,7 @@ public class PacketSniffer {
     private static final Logger logger = LogManager.getLogger(PacketSniffer.class);
     private static final String MINECRAFT_MODS_DIR = "C:\\Users\\jpsch\\AppData\\Roaming\\.minecraft\\mods";
     private static final String CAPTURE_FILE_NAME = "minecraft_packets.txt";
+    private static final String[] PACKET_FORMATS = {"Hexadecimal", "Binary", "Raw"};
 
     public static void main(String[] args) {
         try {
@@ -32,92 +33,136 @@ public class PacketSniffer {
             }
             System.out.println("Selected network interface: " + nif.getName());
 
+            // Wähle das Paketformat aus
+            int packetFormat = 1; // 1 = Hexadecimal, 2 = Binary, 3 = Raw
+            System.out.println("Using " + PACKET_FORMATS[packetFormat - 1] + " format.");
+
+            // Starte das Paket-Sniffing
+            startPacketCapture(nif, packetFormat);
+        } catch (PcapNativeException e) {
+            System.out.println("An error occurred: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    private static int choosePacketFormat(String[] formatOptions) {
+        System.out.println("Available packet formats:");
+        for (int i = 0; i < formatOptions.length; i++) {
+            System.out.println((i + 1) + ". " + formatOptions[i]);
+        }
+
+        Scanner scanner = new Scanner(System.in);
+        int choice;
+        while (true) {
+            System.out.print("Enter the number of the format to use: ");
+            if (scanner.hasNextInt()) {
+                choice = scanner.nextInt();
+                scanner.nextLine(); // Consume the newline character
+                if (choice >= 1 && choice <= formatOptions.length) {
+                    System.out.println("Selected format: " + formatOptions[choice - 1]);
+                    return choice;
+                } else {
+                    System.out.println("Invalid choice. Please enter a valid number.");
+                }
+            } else {
+                System.out.println("Invalid input. Please enter a valid number.");
+                scanner.nextLine(); // Consume the invalid input
+            }
+        }
+    }
+
+    private static void startPacketCapture(PcapNetworkInterface nif, int formatChoice) {
+        Thread writeThread = null;
+        try {
             // Erstelle eine synchronisierte Liste, um die erfassten Pakete zu speichern
             List<Packet> capturedPackets = new CopyOnWriteArrayList<>();
 
             // Erstelle einen Packet Handler zum Verarbeiten der abgefangenen Pakete
-            PacketListener listener = new PacketListener() {
-                @Override
-                public void gotPacket(Packet packet) {
-                    capturedPackets.add(packet);
-                }
-            };
+            PacketListener listener = packet -> capturedPackets.add(packet);
 
             // Öffne den Live-Capture für das Netzwerkinterface
             try (PcapHandle handle = nif.openLive(65536, PcapNetworkInterface.PromiscuousMode.PROMISCUOUS, 10)) {
                 // Setze einen Filter, um nur die gewünschten Pakete zu erfassen
                 handle.setFilter("tcp port 25565", BpfProgram.BpfCompileMode.OPTIMIZE);
 
-                System.out.println("Starting packet capture...");
-                new Thread(() -> {
-                    try {
-                        handle.loop(-1, listener);
-                    } catch (PcapNativeException | InterruptedException | NotOpenException e) {
-                        System.out.println("Error during packet capture: " + e.getMessage());
-                        e.printStackTrace();
-                    }
-                }).start();
-
                 // Speichere die erfassten Pakete in der Datei
-                Path targetPath = Paths.get(MINECRAFT_MODS_DIR, CAPTURE_FILE_NAME);
+                Path targetPath = Path.of(MINECRAFT_MODS_DIR, CAPTURE_FILE_NAME);
                 Files.createDirectories(targetPath.getParent());
 
-                new Thread(() -> {
-                    try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(targetPath.toFile(), true))) {
-                        while (true) {
-                            if (!capturedPackets.isEmpty()) {
-                                List<Packet> packetsCopy = new ArrayList<>(capturedPackets);
-                                System.out.println("Writing " + packetsCopy.size() + " packets to file: " + targetPath);
+                startWritingToFile(capturedPackets, targetPath, formatChoice);
 
-                                System.out.print("Choose the format to save the packets (1 - Hexadecimal, 2 - Binary, 3 - Raw): ");
-                                Scanner scanner = new Scanner(System.in);
-                                int formatChoice = scanner.nextInt();
-
-                                for (Packet packet : packetsCopy) {
-                                    byte[] rawData = packet.getRawData();
-
-                                    if (formatChoice == 1) {
-                                        // Hexadezimalformat
-                                        StringBuilder hexBuilder = new StringBuilder();
-                                        for (byte b : rawData) {
-                                            hexBuilder.append(String.format("%02X ", b));
-                                        }
-                                        bos.write(hexBuilder.toString().getBytes());
-                                        bos.write(System.lineSeparator().getBytes());
-                                    } else if (formatChoice == 2) {
-                                        // Binärformat
-                                        StringBuilder binaryBuilder = new StringBuilder();
-                                        for (byte b : rawData) {
-                                            binaryBuilder.append(String.format("%8s ", Integer.toBinaryString(b & 0xFF)).replace(' ', '0'));
-                                        }
-                                        bos.write(binaryBuilder.toString().getBytes());
-                                        bos.write(System.lineSeparator().getBytes());
-                                    } else if (formatChoice == 3) {
-                                        // Rohdatenformat
-                                        bos.write(rawData);
-                                    }
-                                }
-
-                                bos.flush();
-                                System.out.println("Packets written to file: " + targetPath);
-                                capturedPackets.clear();
-                            }
-                            Thread.sleep(1000); // Pause für 1 Sekunde
-                        }
-                    } catch (IOException | InterruptedException e) {
-                        System.out.println("Error writing packets to file: " + e.getMessage());
-                        e.printStackTrace();
-                    }
-                }).start();
-
-                // Warte auf Benutzerinteraktion, um das Programm zu beenden
-                System.out.println("Press Enter to stop...");
-                System.in.read();
+                // Starte die Paketerfassung
+                System.out.println("Starting packet capture...");
+                System.out.println("Press Enter to stop capturing packets...");
+                handle.loop(-1, listener);
             }
-        } catch (PcapNativeException | IOException | NotOpenException e) {
+        } catch (PcapNativeException | IOException | NotOpenException | InterruptedException e) {
             System.out.println("An error occurred: " + e.getMessage());
             e.printStackTrace();
+        } finally {
+            // Unterbreche den Schreibthread und warte darauf, dass er beendet wird
+            if (writeThread != null) {
+                writeThread.interrupt();
+                try {
+                    writeThread.join();
+                } catch (InterruptedException e) {
+                    System.out.println("Error interrupting write thread: " + e.getMessage());
+                }
+            }
         }
+    }
+
+    private static void startWritingToFile(List<Packet> capturedPackets, Path targetPath, int formatChoice) {
+        Thread writeThread = new Thread(() -> {
+            try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(targetPath.toFile(), true))) {
+                while (!Thread.currentThread().isInterrupted()) {
+                    if (!capturedPackets.isEmpty()) {
+                        List<Packet> packetsCopy = new ArrayList<>(capturedPackets);
+                        System.out.println("Writing " + packetsCopy.size() + " packets to file: " + targetPath);
+                        for (Packet packet : packetsCopy) {
+                            byte[] rawData = packet.getRawData();
+
+                            if (formatChoice == 1) {
+                                // Hexadezimalformat
+                                StringBuilder hexBuilder = new StringBuilder();
+                                for (byte b : rawData) {
+                                    hexBuilder.append(String.format("%02X ", b));
+                                }
+                                String hexString = hexBuilder.toString().trim();
+
+                                // Überprüfe, ob das ClientboundSetEquipmentPacket vorliegt
+                                if (hexString.contains("59")) {
+                                    System.out.println("ClientboundSetEquipmentPacket detected!");
+                                    // Hier kannst du weitere Verarbeitungsschritte für das Packet hinzufügen
+                                }
+
+                                bos.write(hexString.getBytes());
+                                bos.write(System.lineSeparator().getBytes());
+                            } else if (formatChoice == 2) {
+                                // Binärformat
+                                StringBuilder binaryBuilder = new StringBuilder();
+                                for (byte b : rawData) {
+                                    binaryBuilder.append(String.format("%8s ", Integer.toBinaryString(b & 0xFF)).replace(' ', '0'));
+                                }
+                                bos.write(binaryBuilder.toString().getBytes());
+                                bos.write(System.lineSeparator().getBytes());
+                            } else if (formatChoice == 3) {
+                                // Rohdatenformat
+                                bos.write(rawData);
+                            }
+                        }
+                        bos.flush();
+                        System.out.println("Packets written to file: " + targetPath);
+                        capturedPackets.clear();
+                    }
+                    Thread.sleep(1000); // Pause für 1 Sekunde
+                }
+            } catch (IOException | InterruptedException e) {
+                System.out.println("Error writing packets to file: " + e.getMessage());
+                e.printStackTrace();
+            }
+        });
+        writeThread.start();
     }
 
     private static PcapNetworkInterface getDefaultNetworkInterface() {

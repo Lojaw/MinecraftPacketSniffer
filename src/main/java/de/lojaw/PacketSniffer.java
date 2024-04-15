@@ -1,5 +1,7 @@
 package de.lojaw;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.pcap4j.core.*;
@@ -95,7 +97,34 @@ public class PacketSniffer {
                 System.out.println("Starting packet capture...");
                 System.out.println("Press Enter to stop capturing packets...");
                 handle.loop(-1, listener);
+
+                // Starte einen separaten Thread, um auf die Benutzereingabe zu warten
+                Thread stopThread = new Thread(() -> {
+                    System.out.println("Press Enter to stop capturing packets...");
+                    try {
+                        System.in.read();
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                    // Beende die Paketerfassung
+                    try {
+                        handle.breakLoop();
+                    } catch (NotOpenException e) {
+                        e.printStackTrace();
+                    }
+                });
+                stopThread.start();
+
+                // Starte die Paketerfassung
+                System.out.println("Starting packet capture...");
+                handle.loop(-1, listener);
+
+                // Warte, bis der stopThread beendet ist
+                stopThread.join();
+
+
             }
+
         } catch (PcapNativeException | IOException | NotOpenException | InterruptedException e) {
             System.out.println("An error occurred: " + e.getMessage());
             e.printStackTrace();
@@ -133,7 +162,17 @@ public class PacketSniffer {
                                 // Überprüfe, ob das ClientboundSetEquipmentPacket vorliegt
                                 if (hexString.contains("59")) {
                                     System.out.println("ClientboundSetEquipmentPacket detected!");
-                                    // Hier kannst du weitere Verarbeitungsschritte für das Packet hinzufügen
+
+                                    // Erstelle einen ByteBuf aus den Rohdaten
+                                    ByteBuf buffer = Unpooled.wrappedBuffer(rawData);
+                                    System.out.println("ByteBuf content:");
+                                    printHexDump(buffer);
+
+                                    // Rufe handlePacket auf, um das Paket zu verarbeiten
+                                    handlePacket(buffer);
+
+                                    // Nicht vergessen, den ByteBuf wieder freizugeben
+                                    buffer.release();
                                 }
 
                                 bos.write(hexString.getBytes());
@@ -163,6 +202,143 @@ public class PacketSniffer {
             }
         });
         writeThread.start();
+    }
+
+    public static void handlePacket(ByteBuf buffer) {
+        int packetId = readVarInt(buffer);
+        System.out.println("Packet ID: " + packetId);
+        System.out.println("Remaining readable bytes: " + buffer.readableBytes());
+        if (packetId == 60 || packetId == 1295132448) { // ClientboundSetEquipmentPacket
+            int entityId = readVarInt(buffer);
+            System.out.println("Remaining readable bytes after reading entity ID: " + buffer.readableBytes());
+            System.out.println("Entity ID: " + entityId);
+
+            if (buffer.isReadable() && buffer.readableBytes() >= 1) {
+                boolean hasData = buffer.readBoolean();
+                while (hasData && buffer.isReadable()) {
+                    if (buffer.readableBytes() >= 1) {
+                        int slot = buffer.readByte() & 0xFF; // Umwandlung in unsigned Byte
+                        boolean hasItemData = buffer.readableBytes() >= 1 && buffer.readBoolean();
+                        if (slot == 6) {
+                            if (buffer.readableBytes() >= 1) {
+                                int slotData = buffer.readByte() & 0xFF; // Umwandlung in unsigned Byte
+                                if (slotData == 0x80) { // Brustplatte
+                                    if (hasItemData) {
+                                        int itemId = readVarInt(buffer);
+                                        if (buffer.readableBytes() >= 1) {
+                                            int count = buffer.readByte();
+                                            int nbtDataLength = readVarInt(buffer);
+                                            if (buffer.readableBytes() >= nbtDataLength) {
+                                                buffer.skipBytes(nbtDataLength);
+                                                System.out.println("Brustplatte angelegt für Entity " + entityId + ": Item-ID " + itemId + ", Count " + count);
+                                            } else {
+                                                // Nicht genügend Bytes im ByteBuf, um die NBT-Daten zu überspringen
+                                                break;
+                                            }
+                                        } else {
+                                            // Nicht genügend Bytes im ByteBuf, um den Count-Wert zu lesen
+                                            break;
+                                        }
+                                    } else {
+                                        System.out.println("Brustplatte ausgezogen für Entity " + entityId);
+                                    }
+                                } else {
+                                    // Zurücksetzen des Lesezeigers
+                                    buffer.readerIndex(buffer.readerIndex() - 1);
+                                    skipSlotData(buffer);
+                                }
+                            } else {
+                                // Nicht genügend Bytes im ByteBuf, um slotData zu lesen
+                                break;
+                            }
+                        } else {
+                            skipSlotData(buffer);
+                        }
+                    } else {
+                        // Nicht genügend Bytes im ByteBuf, um den Slot-Wert zu lesen
+                        break;
+                    }
+                    hasData = buffer.isReadable() && buffer.readableBytes() >= 1 && buffer.readBoolean();
+                }
+            }
+        }
+    }
+
+    private static void printHexDump(ByteBuf buffer) {
+        int rowSize = 16;
+        StringBuilder hexDump = new StringBuilder();
+        for (int i = 0; i < buffer.readableBytes(); i += rowSize) {
+            hexDump.append(String.format("%04X: ", i));
+            int end = Math.min(i + rowSize, buffer.readableBytes());
+            for (int j = i; j < end; j++) {
+                hexDump.append(String.format("%02X ", buffer.getByte(j)));
+            }
+            for (int j = end; j < i + rowSize; j++) {
+                hexDump.append("   ");
+            }
+            hexDump.append(" ");
+            for (int j = i; j < end; j++) {
+                byte b = buffer.getByte(j);
+                hexDump.append(b >= 32 && b <= 126 ? (char) b : '.');
+            }
+            hexDump.append("\n");
+        }
+        System.out.println(hexDump.toString());
+    }
+
+    private static int readVarInt(ByteBuf buffer) {
+        // Implementierung zum Lesen eines VarInt
+        // Dies ist eine vereinfachte Version, die nur positive Zahlen unterstützt
+        int value = 0;
+        int shift = 0;
+        byte currentByte;
+        do {
+            if (buffer.isReadable()) {
+                currentByte = buffer.readByte();
+                value |= (currentByte & 0x7F) << shift;
+                shift += 7;
+            } else {
+                // Nicht genügend Bytes im ByteBuf, um den VarInt-Wert zu lesen
+                // Hier können Sie einen Fehlerhandling-Code einfügen oder einen Standardwert zurückgeben
+                return 0; // Standardwert 0 zurückgeben
+            }
+        } while ((currentByte & 0x80) != 0);
+        return value;
+    }
+
+    private static void skipSlotData(ByteBuf buffer) {
+        if (buffer.isReadable() && buffer.readableBytes() >= 1) {
+            boolean hasItemData = buffer.readBoolean();
+            if (hasItemData) {
+                readVarInt(buffer); // Item ID
+                if (buffer.isReadable() && buffer.readableBytes() >= 1) {
+                    buffer.readByte(); // Count
+                    int nbtDataLength = readVarInt(buffer);
+                    if (nbtDataLength >= 0) {
+                        if (buffer.readableBytes() >= nbtDataLength) {
+                            buffer.skipBytes(nbtDataLength); // NBT Data
+                        } else {
+                            // Nicht genügend Bytes im ByteBuf, um die NBT-Daten zu überspringen
+                            // Hier können Sie einen Fehlerhandling-Code einfügen
+                        }
+                    } else {
+                        // Ungültiger negativer Wert für nbtDataLength
+                        // Hier können Sie einen Fehlerhandling-Code einfügen oder das Paket überspringen
+                    }
+                } else {
+                    // Nicht genügend Bytes im ByteBuf, um den Count-Wert zu lesen
+                    // Hier können Sie einen Fehlerhandling-Code einfügen
+                }
+            }
+        } else {
+            // Nicht genügend Bytes im ByteBuf, um den hasItemData-Wert zu lesen
+            // Hier können Sie einen Fehlerhandling-Code einfügen
+        }
+    }
+
+    private static void readNbt(ByteBuf buffer) {
+        int nbtDataLength = readVarInt(buffer);
+        buffer.skipBytes(nbtDataLength);
     }
 
     private static PcapNetworkInterface getDefaultNetworkInterface() {

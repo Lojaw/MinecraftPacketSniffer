@@ -1,6 +1,7 @@
 package de.lojaw;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -8,6 +9,7 @@ import org.pcap4j.core.*;
 import org.pcap4j.packet.Packet;
 
 import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -85,7 +87,7 @@ public class PacketSniffer {
             // Öffne den Live-Capture für das Netzwerkinterface
             try (PcapHandle handle = nif.openLive(65536, PcapNetworkInterface.PromiscuousMode.PROMISCUOUS, 10)) {
                 // Setze einen Filter, um nur die gewünschten Pakete zu erfassen
-                handle.setFilter("tcp port 25565", BpfProgram.BpfCompileMode.OPTIMIZE);
+                handle.setFilter("tcp port 36455", BpfProgram.BpfCompileMode.OPTIMIZE);
 
                 // Speichere die erfassten Pakete in der Datei
                 Path targetPath = Path.of(MINECRAFT_MODS_DIR, CAPTURE_FILE_NAME);
@@ -215,52 +217,151 @@ public class PacketSniffer {
 
             if (buffer.isReadable() && buffer.readableBytes() >= 1) {
                 boolean hasData = buffer.readBoolean();
-                while (hasData && buffer.isReadable()) {
+
+                while (buffer.isReadable()) {
                     if (buffer.readableBytes() >= 1) {
-                        int slot = buffer.readByte() & 0xFF; // Umwandlung in unsigned Byte
-                        boolean hasItemData = buffer.readableBytes() >= 1 && buffer.readBoolean();
-                        if (slot == 6) {
-                            if (buffer.readableBytes() >= 1) {
-                                int slotData = buffer.readByte() & 0xFF; // Umwandlung in unsigned Byte
-                                if (slotData == 0x80) { // Brustplatte
-                                    if (hasItemData) {
-                                        int itemId = readVarInt(buffer);
+                        int slotData = buffer.readByte() & 0xFF;
+                        System.out.println("SLOT DATA: " + slotData);
+
+                        if ((slotData & 0x80) != 0) {
+                            boolean hasItemData = (slotData & 0x40) != 0;
+                            int slotId = slotData & 0x3F;
+                            System.out.println("SLOT ID: " + slotId);
+
+                            if (hasItemData) {
+                                System.out.println("Before readString: " + ByteBufUtil.hexDump(buffer));
+                                String itemName = readString(buffer);
+                                System.out.println("After readString: " + ByteBufUtil.hexDump(buffer));
+                                System.out.println("Item name: " + itemName);
+
+                                if(!itemName.isEmpty()) {
+                                    System.out.println("ITEMNAME: " + itemName);
+                                    if (itemName.contains("chestplate")) {
                                         if (buffer.readableBytes() >= 1) {
                                             int count = buffer.readByte();
                                             int nbtDataLength = readVarInt(buffer);
                                             if (buffer.readableBytes() >= nbtDataLength) {
-                                                buffer.skipBytes(nbtDataLength);
-                                                System.out.println("Brustplatte angelegt für Entity " + entityId + ": Item-ID " + itemId + ", Count " + count);
+                                                String color = readColor(buffer, nbtDataLength);
+                                                System.out.println("Brustplatte angelegt für Entity " + entityId + ": " + itemName + ", Count " + count + ", Farbe: " + color);
                                             } else {
-                                                // Nicht genügend Bytes im ByteBuf, um die NBT-Daten zu überspringen
                                                 break;
                                             }
                                         } else {
-                                            // Nicht genügend Bytes im ByteBuf, um den Count-Wert zu lesen
                                             break;
                                         }
                                     } else {
-                                        System.out.println("Brustplatte ausgezogen für Entity " + entityId);
+                                        //System.out.println("ITEMNAME: " + itemName);
                                     }
                                 } else {
-                                    // Zurücksetzen des Lesezeigers
-                                    buffer.readerIndex(buffer.readerIndex() - 1);
                                     skipSlotData(buffer);
                                 }
                             } else {
-                                // Nicht genügend Bytes im ByteBuf, um slotData zu lesen
-                                break;
+                                System.out.println("Brustplatte ausgezogen für Entity " + entityId);
                             }
-                        } else {
-                            skipSlotData(buffer);
                         }
                     } else {
-                        // Nicht genügend Bytes im ByteBuf, um den Slot-Wert zu lesen
                         break;
                     }
-                    hasData = buffer.isReadable() && buffer.readableBytes() >= 1 && buffer.readBoolean();
                 }
+
+
             }
+        }
+    }
+
+    private static String readString(ByteBuf buffer) {
+        if (buffer.readableBytes() >= 2) {
+            int length = buffer.readShort();
+            if (length >= 0 && buffer.readableBytes() >= length) {
+                byte[] bytes = new byte[length];
+                buffer.readBytes(bytes);
+                return new String(bytes, StandardCharsets.UTF_8);
+            }
+        }
+        return "";
+    }
+
+    private static String readColor(ByteBuf buffer, int nbtDataLength) {
+        int initialReaderIndex = buffer.readerIndex();
+        while (buffer.readerIndex() - initialReaderIndex < nbtDataLength) {
+            byte tagType = buffer.readByte();
+            if (tagType == 10) { // Compound tag
+                String tagName = readString(buffer);
+                if (tagName.equals("display")) {
+                    int displayLength = readVarInt(buffer);
+                    int displayInitialReaderIndex = buffer.readerIndex();
+                    while (buffer.readerIndex() - displayInitialReaderIndex < displayLength) {
+                        String displayTagName = readString(buffer);
+                        byte displayTagType = buffer.readByte();
+                        if (displayTagName.equals("color")) {
+                            if (displayTagType == 3) { // Int tag
+                                int colorValue = buffer.readInt();
+                                return String.format("#%06X", colorValue);
+                            } else {
+                                skipTag(buffer, displayTagType);
+                            }
+                        } else {
+                            skipTag(buffer, displayTagType);
+                        }
+                    }
+                } else {
+                    skipTag(buffer, tagType);
+                }
+            } else {
+                skipTag(buffer, tagType);
+            }
+        }
+        return "Unknown";
+    }
+
+    private static void skipTag(ByteBuf buffer, int tagType) {
+        switch (tagType) {
+            case 0: // End tag
+                break;
+            case 1: // Byte tag
+                buffer.skipBytes(1);
+                break;
+            case 2: // Short tag
+                buffer.skipBytes(2);
+                break;
+            case 3: // Int tag
+                buffer.skipBytes(4);
+                break;
+            case 4: // Long tag
+                buffer.skipBytes(8);
+                break;
+            case 5: // Float tag
+                buffer.skipBytes(4);
+                break;
+            case 6: // Double tag
+                buffer.skipBytes(8);
+                break;
+            case 7: // Byte array tag
+                int byteArrayLength = readVarInt(buffer);
+                buffer.skipBytes(byteArrayLength);
+                break;
+            case 8: // String tag
+                readString(buffer);
+                break;
+            case 9: // List tag
+                int listType = buffer.readByte();
+                int listLength = readVarInt(buffer);
+                for (int i = 0; i < listLength; i++) {
+                    skipTag(buffer, listType);
+                }
+                break;
+            case 10: // Compound tag
+                int compoundLength = readVarInt(buffer);
+                buffer.skipBytes(compoundLength);
+                break;
+            case 11: // Int array tag
+                int intArrayLength = readVarInt(buffer);
+                buffer.skipBytes(intArrayLength * 4);
+                break;
+            case 12: // Long array tag
+                int longArrayLength = readVarInt(buffer);
+                buffer.skipBytes(longArrayLength * 8);
+                break;
         }
     }
 
@@ -334,11 +435,6 @@ public class PacketSniffer {
             // Nicht genügend Bytes im ByteBuf, um den hasItemData-Wert zu lesen
             // Hier können Sie einen Fehlerhandling-Code einfügen
         }
-    }
-
-    private static void readNbt(ByteBuf buffer) {
-        int nbtDataLength = readVarInt(buffer);
-        buffer.skipBytes(nbtDataLength);
     }
 
     private static PcapNetworkInterface getDefaultNetworkInterface() {

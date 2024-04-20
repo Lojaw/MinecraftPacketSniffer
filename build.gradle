@@ -7,6 +7,7 @@ version = '1.0-SNAPSHOT'
 
 repositories {
     mavenCentral()
+    maven { url 'https://repo.dmulloy2.net/repository/public/' }
 }
 
 dependencies {
@@ -28,6 +29,8 @@ dependencies {
     implementation 'io.netty:netty-buffer:4.1.60.Final'
     implementation 'io.netty:netty-codec:4.1.60.Final'
     implementation 'io.netty:netty-transport:4.1.60.Final'
+
+    implementation 'com.comphenix.protocol:ProtocolLib:4.8.0'
 }
 
 test {

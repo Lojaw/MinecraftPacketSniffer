@@ -22,7 +22,7 @@ public class ColorCounter {
 
     public static void main(String[] args) {
         List<String> packets = new ArrayList<>();
-        Path filePath = Paths.get("C:", "Minecraft", "WireShark_MC_Packets_3_Copy.txt");
+        Path filePath = Paths.get("C:", "Minecraft", "Traffic TTT Runde Factory.txt");
 
         try (BufferedReader reader = new BufferedReader(new FileReader(String.valueOf(filePath)))) {
             String line;

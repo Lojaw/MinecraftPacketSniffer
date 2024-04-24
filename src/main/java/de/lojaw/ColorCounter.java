@@ -12,10 +12,13 @@ import java.util.List;
 public class ColorCounter {
 
     private static final String RED_SEQUENCE = "ff 00 00";
+    private static final String BA01_SEQUENCE = "ba 01";
+    private static final String FILE_NAME1 = "3_Sequenz_WireShark_MC_Packets_3_Copy.txt";
+    private static final String FILE_NAME2 = "Traffic TTT Runde Modern.txt";
 
     public static void main(String[] args) {
         List<String> packets = new ArrayList<>();
-        Path filePath = Paths.get("C:", "Minecraft", "Traffic TTT Runde Modern.txt");
+        Path filePath = Paths.get("C:", "Minecraft", FILE_NAME2);
 
         try (BufferedReader reader = new BufferedReader(new FileReader(String.valueOf(filePath)))) {
             String line;
@@ -49,6 +52,7 @@ public class ColorCounter {
         System.out.println(packetBuilder);
 
         int redCount = 0;
+        int ba01Count = 0;
 
         boolean isFirstDurchlauf = true;
 
@@ -69,20 +73,51 @@ public class ColorCounter {
                 String color = packetWithoutSpaces.substring(i, i + 6);
 
                 //System.out.println(color);
+                System.out.println("Red Sequence: " + color);
 
                 if (color.equals(redSequenceWithoutSpaces)) {
                     packetRedCount++;
                     System.out.println("Rot gefunden: " + color);
                 }
             }
-
             redCount += packetRedCount;
-
             System.out.println("Packet Red Count: " + packetRedCount);
+
+            int packetBa01Count = 0;
+            for (int i = 0; i <= packetWithoutSpaces.length() - 4; i += 2) {
+                String sequence = packetWithoutSpaces.substring(i, i + 4);
+                System.out.println("Ba01 Sequence: " + sequence);
+                if (sequence.equals("ac01") || sequence.equals("01ac") || sequence.equals("ba01") || sequence.equals("10ab") || sequence.equals(BA01_SEQUENCE.replace(" ", "")) || sequence.equals(reverseSequence(BA01_SEQUENCE.replace(" ", "")))) {
+                    packetBa01Count++;
+                    System.out.println("ba01 gefunden: " + sequence);
+                }
+            }
+            ba01Count += packetBa01Count;
+            System.out.println("Packet ba01 Count: " + packetBa01Count);
             System.out.println();
         }
 
         System.out.println("Red sequence found " + redCount + " times.");
+        System.out.println("ba01 sequence found " + ba01Count + " times.");
+
+
+
+        List<String> entityIds = extractEntityIds("entity_ids Modern.txt");
+
+        for (String packet : packets) {
+            String packetWithoutSpaces = packet.replace(" ", "");
+
+            // Suche nach den Entity-IDs
+            for (String entityId : entityIds) {
+                if (packetWithoutSpaces.contains(entityId)) {
+                    System.out.println("Entity-ID " + entityId + " gefunden in Paket:");
+                    System.out.println(packet);
+                    System.out.println();
+                }
+            }
+
+            // Restlicher Code für die Suche nach den Sequenzen...
+        }
 
     }
 
@@ -104,6 +139,27 @@ public class ColorCounter {
             reversed.append(sequence.substring(i, i + 2));
         }
         return reversed.toString();
+    }
+
+    private static List<String> extractEntityIds(String fileName) {
+        List<String> entityIds = new ArrayList<>();
+        Path filePath = Paths.get("C:", "Minecraft", fileName);
+
+        try (BufferedReader reader = new BufferedReader(new FileReader(String.valueOf(filePath)))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.contains("(ID: ")) {
+                    int startIndex = line.indexOf("(ID: ") + 5;
+                    int endIndex = line.indexOf(")", startIndex);
+                    String entityId = line.substring(startIndex, endIndex);
+                    entityIds.add(entityId);
+                }
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        return entityIds;
     }
 
 }

@@ -22,7 +22,7 @@ public class ColorCounter {
 
     public static void main(String[] args) {
         List<String> packets = new ArrayList<>();
-        Path filePath = Paths.get("C:", "Minecraft", "Traffic TTT Runde Factory.txt");
+        Path filePath = Paths.get("C:", "Minecraft", "Traffic TTT Runde Modern.txt");
 
         try (BufferedReader reader = new BufferedReader(new FileReader(String.valueOf(filePath)))) {
             String line;
@@ -87,7 +87,7 @@ public class ColorCounter {
             for (int i = 0; i <= packetWithoutSpaces.length() - 6; i += 2) {
                 String color = packetWithoutSpaces.substring(i, i + 6);
 
-                System.out.println(color);
+                //System.out.println(color);
 
                 if (color.equals(redSequenceWithoutSpaces)) {
                     packetRedCount++;

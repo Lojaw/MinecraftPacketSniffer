@@ -56,10 +56,13 @@ public class ColorCounter {
 
         boolean isFirstDurchlauf = true;
 
+        List<String> importpackets = new ArrayList<>();
+
         for (String packet : packets) {
             String packetWithoutSpaces = packet.replace(" ", "");
             String redSequenceWithoutSpaces = reverseSequence(RED_SEQUENCE.replace(" ", ""));
 
+            boolean packetAdded = false;
             System.out.println(packetWithoutSpaces);
 
             if (isFirstDurchlauf) {
@@ -78,6 +81,10 @@ public class ColorCounter {
 
                 if (color.equals(redSequenceWithoutSpaces)) {
                     packetRedCount++;
+                    if (!packetAdded) {
+                        importpackets.add(packetWithoutSpaces);
+                        packetAdded = true;
+                    }
                     System.out.println("Rot gefunden: " + color);
                 }
             }
@@ -90,6 +97,10 @@ public class ColorCounter {
                 System.out.println("Ba01 Sequence: " + sequence);
                 if (sequence.equals("ac01") || sequence.equals("01ac") || sequence.equals("ba01") || sequence.equals("10ab") || sequence.equals(BA01_SEQUENCE.replace(" ", "")) || sequence.equals(reverseSequence(BA01_SEQUENCE.replace(" ", "")))) {
                     packetBa01Count++;
+                    if (!packetAdded) {
+                        importpackets.add(packetWithoutSpaces);
+                        packetAdded = true;
+                    }
                     System.out.println("ba01 gefunden: " + sequence);
                 }
             }
@@ -118,6 +129,12 @@ public class ColorCounter {
             }
 
             // Restlicher Code für die Suche nach den Sequenzen...
+        }
+
+        // Ausgabe der importpackets-Liste
+        System.out.println("Wichtige Pakete:");
+        for (String importpacket : importpackets) {
+            System.out.println(importpacket);
         }
 
     }

@@ -69,6 +69,7 @@ public class ColorCounter {
 
             int packetRedCount = 0;
 
+
             for (int i = 0; i <= packetWithoutSpaces.length() - 6; i += 2) {
                 String color = packetWithoutSpaces.substring(i, i + 6);
 
